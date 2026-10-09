@@ -1,0 +1,18 @@
+{
+  "name": "xbt-zaps",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "nostr-tools": "^2.25.2",
+    "nostr-wasm": "^0.1.0",
+    "ws": "^8.22.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
