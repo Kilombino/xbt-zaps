@@ -14,7 +14,9 @@ const { verifyEvent, finalizeEvent } = require('nostr-tools');
 const CHAIN = 'bitcoin-blake2b';
 const HOST = process.env.ZAP_DOMAIN || 'zap.kilombino.com';
 const PORT = +(process.env.PORT || 3108);
-const USERS = { kilombino: 'Kilombino' }; // name@HOST → who receives
+// Lightning addresses served, by domain: name@domain → who receives. kilombino.com reaches this
+// server through kilomultisalon's nginx (it proxies /.well-known/lnurlp/zap and /lnurlp/zap/).
+const ADDRESSES = { [HOST]: { kilombino: 'Kilombino' }, 'kilombino.com': { zap: 'Kilombino' } };
 const MIN_MSAT = 1000, MAX_MSAT = 100_000_000_000; // 1 sat .. 1 BTCB2
 const LND = { host: process.env.LND_REST_HOST || '127.0.0.1', port: +(process.env.LND_REST_PORT || 8280) };
 const MACAROON = process.env.LND_INVOICE_MACAROON;
@@ -39,14 +41,14 @@ function lnd(method, p, body) {
   });
 }
 
-const metadata = (name) => JSON.stringify([['text/plain', `Zap ${USERS[name]} on Bitcoin (BLAKE2b chain)`], ['text/identifier', `${name}@${HOST}`]]);
+const metadata = (name, host) => JSON.stringify([['text/plain', `Zap ${ADDRESSES[host][name]} on Bitcoin (BLAKE2b chain)`], ['text/identifier', `${name}@${host}`]]);
 
 function json(res, code, o) {
   res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
   res.end(JSON.stringify(o));
 }
 
-async function callback(name, q, res) {
+async function callback(name, host, q, res) {
   const amount = parseInt(q.get('amount') || '0', 10);
   if (!(amount >= MIN_MSAT && amount <= MAX_MSAT)) return json(res, 200, { status: 'ERROR', reason: 'amount out of range' });
   let descHash, zapReq = null;
@@ -59,7 +61,7 @@ async function callback(name, q, res) {
     if (tag('chain') && tag('chain') !== CHAIN) return json(res, 200, { status: 'ERROR', reason: `this address is on ${CHAIN}, the zap request is for ${tag('chain')}` });
     descHash = crypto.createHash('sha256').update(nostr).digest();
   } else {
-    descHash = crypto.createHash('sha256').update(metadata(name)).digest();
+    descHash = crypto.createHash('sha256').update(metadata(name, host)).digest();
   }
   const inv = await lnd('POST', '/v1/invoices', { value_msat: String(amount), description_hash: descHash.toString('base64'), expiry: '3600' });
   if (zapReq) { pending[Buffer.from(inv.r_hash, 'base64').toString('hex')] = { zapReq, raw: nostr, bolt11: inv.payment_request, at: Date.now() }; save(); }
@@ -100,14 +102,18 @@ setInterval(async () => {
 
 http.createServer(async (req, res) => {
   try {
-    const u = new URL(req.url, `https://${HOST}`);
+    // The domain the address was asked on (behind a proxy, its forwarded host).
+    const asked = String(req.headers['x-forwarded-host'] || req.headers.host || HOST).split(',')[0].trim().split(':')[0].toLowerCase();
+    const host = ADDRESSES[asked] ? asked : HOST;
+    const users = ADDRESSES[host];
+    const u = new URL(req.url, `https://${host}`);
     let m;
-    if ((m = u.pathname.match(/^\/\.well-known\/lnurlp\/([a-z0-9._-]+)$/)) && USERS[m[1]]) {
-      return json(res, 200, { tag: 'payRequest', callback: `https://${HOST}/lnurlp/${m[1]}/callback`, minSendable: MIN_MSAT, maxSendable: MAX_MSAT,
-        metadata: metadata(m[1]), allowsNostr: true, nostrPubkey: PUB, commentAllowed: 0, chain: CHAIN });
+    if ((m = u.pathname.match(/^\/\.well-known\/lnurlp\/([a-z0-9._-]+)$/)) && users[m[1]]) {
+      return json(res, 200, { tag: 'payRequest', callback: `https://${host}/lnurlp/${m[1]}/callback`, minSendable: MIN_MSAT, maxSendable: MAX_MSAT,
+        metadata: metadata(m[1], host), allowsNostr: true, nostrPubkey: PUB, commentAllowed: 0, chain: CHAIN });
     }
-    if ((m = u.pathname.match(/^\/lnurlp\/([a-z0-9._-]+)\/callback$/)) && USERS[m[1]]) return await callback(m[1], u.searchParams, res);
-    if (u.pathname === '/') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(`XBT zaps (${CHAIN}): kilombino@${HOST}\n`); }
+    if ((m = u.pathname.match(/^\/lnurlp\/([a-z0-9._-]+)\/callback$/)) && users[m[1]]) return await callback(m[1], host, u.searchParams, res);
+    if (u.pathname === '/') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(`XBT zaps (${CHAIN}): ${Object.entries(ADDRESSES).flatMap(([d, us]) => Object.keys(us).map((n) => `${n}@${d}`)).join(', ')}\n`); }
     json(res, 404, { status: 'ERROR', reason: 'not found' });
   } catch (e) { console.log('error', e.message); json(res, 500, { status: 'ERROR', reason: e.message }); }
 }).listen(PORT, '0.0.0.0', () => console.log('xbt-zaps on', PORT));

@@ -7,7 +7,7 @@ own LND. It marks the chain at every step so clients never mix it up with SHA-25
 - a zap request (kind 9734) tagged `["chain", "<other>"]` is refused;
 - the zap receipt (kind 9735) carries `["chain", "bitcoin-blake2b"]`.
 
-Live: `kilombino@zap.kilombino.com`.
+Live: `zap@kilombino.com (also kilombino@zap.kilombino.com)`.
 
 ## Run
 
